@@ -1,10 +1,15 @@
 name: Recruiting Internship Scout
 description: >
   Scouts healthcare internship/part-time opportunities for Werner Hoppe and
-  logs new matches to the "Internship Tracker" sheet in his recruiting-tracker.xlsx
-  on Google Drive.
+  reports new matches directly in his chat with Claude (does not edit any
+  spreadsheet — that was the original design, but Werner asked to drop it
+  in favor of a plain chat report).
 schedule: "0 9 * * 1-5"  # Every weekday at 9:00 AM Mountain Time (America/Denver)
 enabled: true
+
+routine:
+  mode: persistent_session   # fires into Werner's existing chat, not a fresh session
+  trigger_id: trig_012nncecsYZNtrJaK6HU4dDQ
 
 notes: |
   The Mountain Time -> UTC offset used for the actual trigger changes with
@@ -13,51 +18,18 @@ notes: |
   should be nudged by an hour around the mid-March / early-November
   transitions to keep firing at 9:00 AM local.
 
+  History: this task originally appended new rows to a "recruiting-tracker.xlsx"
+  Google Drive file each run (see git history for scripts/tracker_tool.py,
+  removed when this changed). Werner asked to stop that and just get the
+  list in chat instead, so there is no Drive/connector dependency anymore —
+  WebSearch is a built-in tool and needs no connector grant.
+
 prompt: |
-  You are running a daily scouting job for Werner Hoppe, a BYU Finance student
-  and intern at PACS Group Inc. (a healthcare administration company that
-  operates skilled nursing facilities). Find new internship and part-time job
-  opportunities and log them to his tracker.
+  Run today's healthcare internship/part-time scouting search for Werner
+  Hoppe, a BYU Finance student and intern at PACS Group Inc. (a healthcare
+  administration company that operates skilled nursing facilities).
 
-  ## Tracker file
-
-  The tracker is a Google Drive file titled exactly "recruiting-tracker.xlsx",
-  sheet "Internship Tracker". Its Drive file ID CHANGES every time this task
-  updates it (see "Updating the file" below), so never hardcode a file ID
-  from a previous run — always look it up fresh:
-
-    mcp__Google_Drive__search_files with query:
-      title = 'recruiting-tracker.xlsx' and mimeType != 'application/vnd.google-apps.folder'
-
-  Columns, in order: Date Found | Company | Role Title | Location | Track |
-  Category | Deadline to Apply | Job Posting Link | Source | Contact Info | Notes
-
-  ## Step 1 — Read existing rows
-
-  Download the file (mcp__Google_Drive__download_file_content), write the
-  returned base64 to a scratch file, decode it, and verify integrity before
-  editing:
-
-    base64 -d tracker_b64.txt > tracker.xlsx
-    python3 -c "import zipfile; zipfile.ZipFile('tracker.xlsx').testzip()"
-
-  If that raises an error, the base64 was transcribed badly — re-run the
-  download and rewrite the scratch file once more before continuing (this
-  has happened before; don't loop more than once, just retry cleanly).
-
-  Then read existing rows with the repo helper script (pip install -q
-  openpyxl first if it's not already available):
-
-    python3 scripts/tracker_tool.py read tracker.xlsx
-
-  This prints existing rows as JSON. Note every "Job Posting Link" — these
-  are opportunities already logged. Do not add anything whose link already
-  appears there, and do not duplicate an opportunity that's clearly the same
-  posting under a slightly different link (same company + same role title +
-  same location counts as a duplicate). The append step below also enforces
-  this same dedup rule as a backstop.
-
-  ## Step 2 — Search for new opportunities
+  ## Search criteria
 
   Search two tracks. In both, only include roles in healthcare operations,
   healthcare finance, or healthcare administration, or roles clearly adjacent
@@ -89,43 +61,18 @@ prompt: |
   several WebSearch queries in parallel per batch (covering both tracks and
   multiple sources at once) rather than one at a time.
 
-  ## Step 3 — Build new rows and append
+  ## Dedup
 
-  If you found zero new matches, stop here — do not touch the Drive file —
-  and report "0 new matches" (see Step 5).
+  This Routine fires into the same ongoing chat session every weekday, so
+  there is no spreadsheet to check — instead, scan back through this
+  conversation's history for postings already reported in an earlier run
+  (match by Job Posting Link, or by the same Company + Role Title +
+  Location) and don't repeat them.
 
-  Otherwise, build a JSON list of new-row objects (keys = the column headers
-  above; omit "Date Found" and it will auto-fill to today; omit "Contact
-  Info" — always leave that blank) and run:
+  ## Report
 
-    python3 scripts/tracker_tool.py append tracker.xlsx new_rows.json tracker_updated.xlsx
-
-  This prints a summary of what was added vs. skipped as a dedup backstop.
-  For "Notes", write one short sentence on why it matched.
-
-  ## Step 4 — Upload the update
-
-  There is no in-place "update file content" call available for Drive files
-  in this toolset — only create a new file or edit metadata. So:
-
-  1. Get the current file's parentId with mcp__Google_Drive__get_file_metadata
-     on the ID found in Step 1 (or reuse it if already fetched).
-  2. base64-encode the updated file (`base64 -w0 tracker_updated.xlsx`), read
-     that scratch file once, and call mcp__Google_Drive__create_file with the
-     same title ("recruiting-tracker.xlsx"), the same parentId,
-     contentMimeType "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-     and disableConversionToGoogleType true.
-  3. Sanity-check the upload by comparing the returned fileSize to the local
-     file's size (`stat -c%s tracker_updated.xlsx`) — they should match
-     exactly. Don't re-download and diff the whole file byte-for-byte; that's
-     unnecessary given the pre-upload integrity check in Step 1 and wastes a
-     lot of context on a giant base64 round-trip.
-  4. Trash the old file ID with mcp__Google_Drive__trash_file (recoverable
-     from Drive trash, not a permanent delete).
-
-  ## Step 5 — Report
-
-  If you added 1 or more new rows, start your response with a one-line count
-  (e.g. "3 new matches added"), then list each new opportunity (company,
-  role, location, link). If you found zero new matches, say so in one line
-  and do not modify the tracker.
+  Report straight to the chat — do not create or edit any file. If you found
+  zero new matches, say so in one line. Otherwise lead with a one-line count
+  (e.g. "3 new matches found"), then list each new opportunity: company,
+  role title, location, which track it's under, the direct posting link, and
+  one short sentence on why it matched.
